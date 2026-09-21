@@ -16,6 +16,10 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
     private var menuBarItem: NSStatusItem? = nil
     private var view: NSView = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: Constants.Widget.height))
     private var popup: PopupWindow? = nil
+    private var auxiliaryModule: Module? = nil
+    private var localMouseMonitor: Any? = nil
+    private var globalMouseMonitor: Any? = nil
+    private var auxiliaryCloseWorkItem: DispatchWorkItem? = nil
     
     private var status: Bool {
         Store.shared.bool(key: "CombinedModules", defaultValue: false)
@@ -49,8 +53,10 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
             }
         }
         
-        self.popup = PopupWindow(title: "Combined modules", module: .combined, view: Popup()) { _ in }
-        
+        self.popup = PopupWindow(title: "Combined modules", module: .combined, view: Popup()) { [weak self] state in
+            self?.combinedPopupVisibilityChanged(state)
+        }
+
         if self.status {
             self.enable()
         }
@@ -60,11 +66,14 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
     }
     
     deinit {
+        self.removeMouseMonitors()
+        self.hideAuxiliaryPopup()
         NotificationCenter.default.removeObserver(self, name: .toggleOneView, object: nil)
         NotificationCenter.default.removeObserver(self, name: .moduleRearrange, object: nil)
     }
     
     public func enable() {
+        self.installMouseMonitors()
         self.menuBarItem = NSStatusBar.system.statusItem(withLength: 0)
         DispatchQueue.main.async(execute: {
             self.menuBarItem?.autosaveName = "CombinedModules"
@@ -83,6 +92,9 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
     }
     
     public func disable() {
+        self.hideAuxiliaryPopup()
+        self.popup?.hide()
+        self.removeMouseMonitors()
         if let item = self.menuBarItem {
             NSStatusBar.system.removeStatusItem(item)
         }
@@ -108,6 +120,136 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
         }
         self.view.setFrameSize(NSSize(width: w, height: self.view.frame.height))
         self.menuBarItem?.length = w
+    }
+
+    private func installMouseMonitors() {
+        guard self.localMouseMonitor == nil, self.globalMouseMonitor == nil else { return }
+
+        self.localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            self?.handlePointerLocation(NSEvent.mouseLocation)
+            return event
+        }
+        self.globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            self?.handlePointerLocation(NSEvent.mouseLocation)
+        }
+    }
+
+    private func removeMouseMonitors() {
+        if let monitor = self.localMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            self.localMouseMonitor = nil
+        }
+        if let monitor = self.globalMouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            self.globalMouseMonitor = nil
+        }
+        self.auxiliaryCloseWorkItem?.cancel()
+        self.auxiliaryCloseWorkItem = nil
+    }
+
+    private func combinedPopupVisibilityChanged(_ state: Bool) {
+        if !state {
+            self.hideAuxiliaryPopup()
+        }
+    }
+
+    private func moduleInCombinedPopup(at screenPoint: NSPoint) -> Module? {
+        guard let popup = self.popup, popup.isVisible else { return nil }
+        return self.activeModules.first { module in
+            guard let portal = module.portal, let window = portal.window else { return false }
+            let rectInWindow = portal.convert(portal.bounds, to: nil)
+            return window.convertToScreen(rectInWindow).contains(screenPoint)
+        }
+    }
+
+    private func module(at screenPoint: NSPoint) -> Module? {
+        self.moduleInCombinedPopup(at: screenPoint)
+    }
+
+    private func handlePointerLocation(_ screenPoint: NSPoint) {
+        guard let popup = self.popup, popup.isVisible else {
+            self.hideAuxiliaryPopup()
+            return
+        }
+
+        if let auxiliaryModule = self.auxiliaryModule, !auxiliaryModule.popupIsVisible {
+            self.hideAuxiliaryPopup()
+        }
+
+        if let module = self.module(at: screenPoint) {
+            self.auxiliaryCloseWorkItem?.cancel()
+            self.auxiliaryCloseWorkItem = nil
+            self.showAuxiliaryPopup(for: module, beside: popup.frame)
+            return
+        }
+
+        let auxiliaryFrame = self.auxiliaryModule?.popupFrame ?? .zero
+        let regions = PopupHoverRegions(main: popup.frame, auxiliary: auxiliaryFrame)
+        if regions.contains(screenPoint) {
+            self.auxiliaryCloseWorkItem?.cancel()
+            self.auxiliaryCloseWorkItem = nil
+            return
+        }
+
+        self.scheduleAuxiliaryPopupDismissal()
+    }
+
+    private func scheduleAuxiliaryPopupDismissal() {
+        guard self.auxiliaryModule != nil, self.auxiliaryCloseWorkItem == nil else { return }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard let popup = self.popup, popup.isVisible else {
+                self.hideAuxiliaryPopup()
+                return
+            }
+
+            let point = NSEvent.mouseLocation
+            let auxiliaryFrame = self.auxiliaryModule?.popupFrame ?? .zero
+            let regions = PopupHoverRegions(main: popup.frame, auxiliary: auxiliaryFrame)
+            if !regions.contains(point), self.module(at: point) == nil {
+                self.hideAuxiliaryPopup()
+                popup.hide()
+            }
+            self.auxiliaryCloseWorkItem = nil
+        }
+        self.auxiliaryCloseWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: workItem)
+    }
+
+    private func showAuxiliaryPopup(for module: Module, beside mainFrame: NSRect) {
+        guard module.hasPopup else { return }
+        if self.auxiliaryModule === module, module.popupIsVisible {
+            return
+        }
+
+        self.auxiliaryModule?.hidePopup()
+        let size = module.popupContentSize
+        guard size.width > 0, size.height > 0 else { return }
+
+        self.auxiliaryModule = module
+        self.popup?.setKeepVisibleOnResign(true)
+
+        let gap: CGFloat = 6
+        let screen = NSScreen.screens.first(where: { $0.frame.intersects(mainFrame) }) ?? NSScreen.main
+        var x = mainFrame.minX - size.width - gap
+        if let screen, x < screen.frame.minX {
+            x = mainFrame.maxX + gap
+        }
+        var y = mainFrame.maxY - size.height
+        if let screen {
+            y = min(max(y, screen.visibleFrame.minY + 3), screen.visibleFrame.maxY - size.height - 3)
+        }
+
+        module.showPopup(at: NSPoint(x: x, y: y), keepVisibleOnResign: true)
+    }
+
+    private func hideAuxiliaryPopup() {
+        self.auxiliaryCloseWorkItem?.cancel()
+        self.auxiliaryCloseWorkItem = nil
+        self.auxiliaryModule?.hidePopup()
+        self.auxiliaryModule = nil
+        self.popup?.setKeepVisibleOnResign(false)
     }
     
     // call when popup appear/disappear
@@ -164,10 +306,10 @@ internal class CombinedView: NSObject, NSGestureRecognizerDelegate {
                 }
             }
             
-            popup.setFrameOrigin(NSPoint(x: x, y: y))
-            popup.setIsVisible(true)
+            popup.show(at: NSPoint(x: x, y: y))
         } else {
-            popup.setIsVisible(false)
+            self.hideAuxiliaryPopup()
+            popup.hide()
         }
     }
     

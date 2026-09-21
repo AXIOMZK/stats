@@ -11,6 +11,20 @@
 
 import Cocoa
 
+public struct PopupHoverRegions {
+    public let main: NSRect
+    public let auxiliary: NSRect
+
+    public init(main: NSRect, auxiliary: NSRect) {
+        self.main = main
+        self.auxiliary = auxiliary
+    }
+
+    public func contains(_ point: NSPoint) -> Bool {
+        self.main.contains(point) || self.auxiliary.contains(point)
+    }
+}
+
 public final class PopupCache<T> {
     public var value: T?
     public var initialized: Bool = false
@@ -81,6 +95,7 @@ public class PopupWindow: NSWindow, NSWindowDelegate {
     private let viewController: PopupViewController
     internal var locked: Bool = false
     internal var openedBy: widget_t? = nil
+    private var keepVisibleOnResign: Bool = false
     
     public init(title: String, module: ModuleType, view: Popup_p?, visibilityCallback: @escaping (_ state: Bool) -> Void) {
         self.viewController = PopupViewController(module: module)
@@ -114,6 +129,28 @@ public class PopupWindow: NSWindow, NSWindowDelegate {
         self.setIsVisible(false)
         self.delegate = self
     }
+
+    public var contentSize: NSSize {
+        self.contentView?.invalidateIntrinsicContentSize()
+        return self.contentView?.intrinsicContentSize ?? self.frame.size
+    }
+
+    public func show(at origin: NSPoint, keepVisibleOnResign: Bool = false) {
+        self.keepVisibleOnResign = keepVisibleOnResign
+        self.contentView?.invalidateIntrinsicContentSize()
+        self.setFrameOrigin(origin)
+        self.setIsVisible(true)
+    }
+
+    public func hide() {
+        self.keepVisibleOnResign = false
+        self.locked = false
+        self.setIsVisible(false)
+    }
+
+    public func setKeepVisibleOnResign(_ state: Bool) {
+        self.keepVisibleOnResign = state
+    }
     
     public func windowWillMove(_ notification: Notification) {
         self.viewController.setCloseButton(true)
@@ -121,7 +158,7 @@ public class PopupWindow: NSWindow, NSWindowDelegate {
     }
     
     public func windowDidResignKey(_ notification: Notification) {
-        if self.locked {
+        if self.locked || self.keepVisibleOnResign {
             return
         }
         

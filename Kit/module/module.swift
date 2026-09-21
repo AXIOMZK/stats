@@ -91,6 +91,10 @@ open class Module {
     public var userDefaults: UserDefaults? = UserDefaults(suiteName: "\(Bundle.main.object(forInfoDictionaryKey: "TeamId") as! String).eu.exelban.Stats.widgets")
     
     public var popupKeyboardShortcut: [UInt16] { self.popupView?.keyboardShortcut ?? [] }
+    public var hasPopup: Bool { self.popupView != nil }
+    public var popupContentSize: NSSize { self.popup?.contentSize ?? .zero }
+    public var popupIsVisible: Bool { self.popup?.isVisible ?? false }
+    public var popupFrame: NSRect { self.popup?.frame ?? .zero }
     
     private var moduleType: ModuleType
     
@@ -231,14 +235,22 @@ open class Module {
         self.readers.forEach{ $0.stop() }
         self.menuBar.disable()
         self.window?.setState(self.enabled)
-        self.popup?.setIsVisible(false)
+        self.popup?.hide()
         debug("Module disabled", log: self.log)
     }
     
     public func setReaders(_ list: [Reader_p?]) {
         self.readers = list.filter({ $0 != nil }).map({ $0! as Reader_p })
     }
-    
+
+    public func showPopup(at origin: NSPoint, keepVisibleOnResign: Bool = false) {
+        self.popup?.show(at: origin, keepVisibleOnResign: keepVisibleOnResign)
+    }
+
+    public func hidePopup() {
+        self.popup?.hide()
+    }
+
     // determine if module is available (can be overrided in module)
     open func isAvailable() -> Bool { return true }
     
@@ -325,12 +337,11 @@ open class Module {
                 }
             }
             
-            popup.setFrameOrigin(NSPoint(x: x, y: y))
-            popup.setIsVisible(true)
+            popup.show(at: NSPoint(x: x, y: y))
         } else {
             popup.locked = false
             popup.openedBy = nil
-            popup.setIsVisible(false)
+            popup.hide()
         }
     }
     
@@ -361,7 +372,7 @@ open class Module {
     
     @objc private func listenForMouseDownInSettings() {
         if let popup = self.popup, popup.isVisible && !popup.locked {
-            self.popup?.setIsVisible(false)
+            self.popup?.hide()
         }
     }
     

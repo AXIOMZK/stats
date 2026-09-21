@@ -10,9 +10,21 @@
 //
 
 import XCTest
+import Cocoa
 import Kit
 
 class KitTests: XCTestCase {
+    func testPopupHoverRegionsKeepOpenWhenPointerIsInEitherWindow() throws {
+        let regions = PopupHoverRegions(
+            main: NSRect(x: 100, y: 100, width: 240, height: 300),
+            auxiliary: NSRect(x: 0, y: 120, width: 90, height: 180)
+        )
+
+        XCTAssertTrue(regions.contains(NSPoint(x: 120, y: 140)))
+        XCTAssertTrue(regions.contains(NSPoint(x: 40, y: 160)))
+        XCTAssertFalse(regions.contains(NSPoint(x: 300, y: 160)))
+    }
+
     func testIsNewestVersion_release() throws {
         XCTAssertFalse(isNewestVersion(currentVersion: "v2.11.0", latestVersion: "v2.11.0"))
         XCTAssertTrue(isNewestVersion(currentVersion: "v2.11.0", latestVersion: "v2.11.1"))
