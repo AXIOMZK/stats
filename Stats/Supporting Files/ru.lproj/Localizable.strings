@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "Цельсия";
 "Fahrenheit" = "Фаренгейта";
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "Сохранить скорость вентилятора";
 "Fan" = "Вентилятор";
 "HID sensors" = "HID датчики";

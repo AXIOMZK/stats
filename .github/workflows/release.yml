@@ -37,6 +37,70 @@ jobs:
           app_path="$archive_path/Products/Applications/Stats.app"
           dmg_root="$RUNNER_TEMP/Stats-dmg-root"
 
+          # The public fork does not have a Developer ID certificate in CI.
+          # An ad-hoc signature cannot launch an SMAppService LaunchDaemon on
+          # Apple Silicon. Generate a temporary identity first so the build can
+          # use a matching self-signed requirement in both plist files.
+          signing_keychain="$RUNNER_TEMP/ax-stats-signing.keychain-db"
+          signing_password="$(openssl rand -hex 24)"
+          signing_dir="$RUNNER_TEMP/ax-stats-signing"
+          mkdir -p "$signing_dir"
+          security create-keychain -p "$signing_password" "$signing_keychain"
+          security unlock-keychain -p "$signing_password" "$signing_keychain"
+          security set-keychain-settings -lut 21600 "$signing_keychain"
+
+          cat > "$signing_dir/openssl.cnf" <<'EOF'
+          [req]
+          distinguished_name = req_distinguished_name
+          x509_extensions = codesigning
+          prompt = no
+          [req_distinguished_name]
+          CN = AX Stats Build Signing
+          O = AX Stats
+          OU = AXIOMZK
+          [codesigning]
+          basicConstraints = critical,CA:false
+          keyUsage = critical,digitalSignature
+          extendedKeyUsage = codeSigning
+          EOF
+          openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -config "$signing_dir/openssl.cnf" \
+            -keyout "$signing_dir/key.pem" \
+            -out "$signing_dir/cert.pem"
+          openssl pkcs12 -export -legacy \
+            -keypbe PBE-SHA1-3DES \
+            -certpbe PBE-SHA1-3DES \
+            -macalg sha1 \
+            -out "$signing_dir/signing.p12" \
+            -inkey "$signing_dir/key.pem" \
+            -in "$signing_dir/cert.pem" \
+            -passout "pass:$signing_password"
+          security import "$signing_dir/signing.p12" \
+            -k "$signing_keychain" \
+            -P "$signing_password" \
+            -T /usr/bin/codesign \
+            -A
+          security add-trusted-cert -d -r trustRoot \
+            -k "$signing_keychain" "$signing_dir/cert.pem"
+          signing_identity="$(security find-identity -v -p codesigning "$signing_keychain" | \
+            sed -n 's/.*) \([A-F0-9]*\) .*/\1/p' | head -1)"
+          if [[ -z "$signing_identity" ]]; then
+            echo "Unable to create a self-signed code-signing identity."
+            exit 1
+          fi
+
+          # The helper's embedded SMAuthorizedClients requirement must match
+          # the app's self-signed designated requirement. Keep this CI-only;
+          # official Developer ID builds continue to use the source plists.
+          app_requirement='anchor rootCert and identifier "eu.exelban.Stats.SMC.Helper"'
+          client_requirement='anchor rootCert and identifier "eu.exelban.Stats"'
+          /usr/libexec/PlistBuddy -c \
+            "Set :SMPrivilegedExecutables:eu.exelban.Stats.SMC.Helper $app_requirement" \
+            "Stats/Supporting Files/Info.plist"
+          /usr/libexec/PlistBuddy -c \
+            "Set :SMAuthorizedClients:0 $client_requirement" \
+            "SMC/Helper/Info.plist"
+
           xcodebuild \
             -scheme Stats \
             -destination 'platform=macOS' \
@@ -55,10 +119,31 @@ jobs:
             exit 1
           fi
 
-          # The public fork has no Developer ID certificate in CI. Ad-hoc sign
-          # the built app so users can approve it in Privacy & Security.
-          codesign --deep --force --sign - "$app_path"
+          while IFS= read -r executable; do
+            if file -b "$executable" | grep -q 'Mach-O'; then
+              codesign --force --options runtime --timestamp=none \
+                --keychain "$signing_keychain" \
+                --sign "$signing_identity" "$executable"
+            fi
+          done < <(find "$app_path" -type f -perm -111 -print)
+          # The app bundle seal is written last. This explicit pass is needed
+          # because codesign --deep does not discover LaunchServices helpers.
+          codesign --deep --force --options runtime --timestamp=none \
+            --keychain "$signing_keychain" \
+            --sign "$signing_identity" "$app_path"
           codesign --verify --deep --strict "$app_path"
+          helper_path="$app_path/Contents/Library/LaunchServices/eu.exelban.Stats.SMC.Helper"
+          codesign --verify \
+            --requirements '=anchor rootCert and identifier "eu.exelban.Stats"' \
+            "$app_path"
+          codesign --verify \
+            --requirements '=anchor rootCert and identifier "eu.exelban.Stats.SMC.Helper"' \
+            "$helper_path"
+          helper_authority="$(codesign -dv --verbose=4 "$helper_path" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+          if [[ -z "$helper_authority" || "$helper_authority" == "-" ]]; then
+            echo "The privileged fan helper is still ad-hoc signed."
+            exit 1
+          fi
 
           ditto -c -k --keepParent "$app_path" "Stats-${version}.zip"
           mkdir -p "$dmg_root"

@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "เซลเซียส";
 "Fahrenheit" = "ฟาเรนไฮต์";
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "บันทึกความเร็วพัดลม";
 "Fan" = "พัดลม";
 "HID sensors" = "เซ็นเซอร์ HID";

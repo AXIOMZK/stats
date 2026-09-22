@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "Celsia"; // gemma4:31b
 "Fahrenheit" = "Fahrenheita"; // qwen3.8:27b
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "Uložit rychlost ventilátoru";
 "Fan" = "Ventilátor";
 "HID sensors" = "HID senzory";

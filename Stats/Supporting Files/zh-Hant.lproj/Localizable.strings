@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "攝氏 (˚C)";
 "Fahrenheit" = "華氏 (˚F)";
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "儲存風扇速度";
 "Fan" = "風扇";
 "HID sensors" = "HID感知器";

@@ -24,8 +24,16 @@ The tag is the release version. Keep it in `vMAJOR.MINOR.PATCH` form. The
 workflow builds the tagged commit for a tag-triggered run, or the selected
 branch for a manually triggered run.
 
+The public fork does not store a Developer ID certificate. CI therefore creates
+a temporary self-signed code-signing identity for the app and the SMC helper,
+and uses a matching `anchor rootCert` requirement in the generated app/helper
+plists. This CI-only requirement is required for the Apple Silicon privileged
+helper; an ad-hoc signature can launch the UI but cannot start the
+`SMAppService` LaunchDaemon used for fan control. macOS may still require the
+user to approve Stats in Privacy & Security / Login Items on first launch.
+
 Before publishing, update `MARKETING_VERSION` for the Stats target in
-`Stats.xcodeproj/project.pbxproj` to the same version (for example `3.0.18`).
+`Stats.xcodeproj/project.pbxproj` to the same version (for example `3.0.19`).
 The workflow rejects a tag when the built app version does not match it.
 
 ## Homebrew cask updates

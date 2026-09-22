@@ -38,6 +38,25 @@ class KitTests: XCTestCase {
         XCTAssertEqual(profile.speedPercent(at: 100), 0.8, accuracy: 0.0001)
     }
 
+    func testFanCurveProfile_usesUnsortedCustomPoints() throws {
+        let profile = FanCurveProfile(
+            id: "custom",
+            name: "Custom",
+            parameters: FanCurveParameters(
+                startTemperatureC: 50,
+                ceilingTemperatureC: 80
+            ),
+            points: [
+                FanCurvePoint(temperatureC: 80, speedPercent: 1),
+                FanCurvePoint(temperatureC: 50, speedPercent: 0.2),
+                FanCurvePoint(temperatureC: 65, speedPercent: 0.6)
+            ]
+        )
+
+        XCTAssertEqual(profile.speedPercent(at: 57.5), 0.4, accuracy: 0.0001)
+        XCTAssertEqual(profile.speedPercent(at: 72.5), 0.8, accuracy: 0.0001)
+    }
+
     func testFanCurveProfile_shapesRemainMonotonic() throws {
         let temperatures = stride(from: 50.0, through: 80.0, by: 2.5)
         for shape in FanCurveShape.allCases {
