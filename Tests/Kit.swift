@@ -14,6 +14,81 @@ import Cocoa
 import Kit
 
 class KitTests: XCTestCase {
+    func testFanCurveProfile_respectsTemperatureBoundariesAndCap() throws {
+        let profile = FanCurveProfile(
+            id: "test",
+            name: "Test",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 45,
+                startTemperatureC: 50,
+                ceilingTemperatureC: 80,
+                maxSpeedPercent: 0.8
+            ),
+            points: [
+                FanCurvePoint(temperatureC: 50, speedPercent: 0.2),
+                FanCurvePoint(temperatureC: 65, speedPercent: 0.5),
+                FanCurvePoint(temperatureC: 80, speedPercent: 1.0)
+            ]
+        )
+
+        XCTAssertEqual(profile.speedPercent(at: 40), 0, accuracy: 0.0001)
+        XCTAssertEqual(profile.speedPercent(at: 50), 0.2, accuracy: 0.0001)
+        XCTAssertEqual(profile.speedPercent(at: 57.5), 0.35, accuracy: 0.0001)
+        XCTAssertEqual(profile.speedPercent(at: 80), 0.8, accuracy: 0.0001)
+        XCTAssertEqual(profile.speedPercent(at: 100), 0.8, accuracy: 0.0001)
+    }
+
+    func testFanCurveProfile_shapesRemainMonotonic() throws {
+        let temperatures = stride(from: 50.0, through: 80.0, by: 2.5)
+        for shape in FanCurveShape.allCases {
+            let profile = FanCurveProfile(
+                id: shape.rawValue,
+                name: shape.rawValue,
+                parameters: FanCurveParameters(
+                    startTemperatureC: 50,
+                    ceilingTemperatureC: 80,
+                    curveShape: shape
+                )
+            )
+            var previous = -1.0
+            for temperature in temperatures {
+                let current = profile.speedPercent(at: temperature)
+                XCTAssertGreaterThanOrEqual(current, previous, "shape=\(shape.rawValue)")
+                previous = current
+            }
+        }
+    }
+
+    func testFanCurveProfile_roundTripsThroughJSON() throws {
+        let profile = FanCurveProfile(
+            id: "custom",
+            name: "Custom",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 48,
+                startTemperatureC: 52,
+                ceilingTemperatureC: 88,
+                maxSpeedPercent: 0.75,
+                rampUpPerSecond: 0.1,
+                rampDownPerSecond: 0.03,
+                sustainedTriggerSeconds: 6,
+                curveShape: .sCurve,
+                instantEngage: true,
+                alwaysOn: false,
+                handsOff: false
+            ),
+            points: [FanCurvePoint(temperatureC: 52, speedPercent: 0.1)],
+            fanOverrides: [1: [FanCurvePoint(temperatureC: 60, speedPercent: 0.4)]]
+        )
+
+        let data = try JSONEncoder().encode(profile)
+        let decoded = try JSONDecoder().decode(FanCurveProfile.self, from: data)
+        XCTAssertEqual(decoded, profile)
+    }
+
+    func testFanCurveProfile_hasThermalForgeBuiltIns() throws {
+        XCTAssertEqual(Set(FanCurveProfile.builtIns.map(\.id)), Set(["silent", "balanced", "performance", "max", "smart"]))
+    }
+
     func testPopupHoverRegionsKeepOpenWhenPointerIsInEitherWindow() throws {
         let regions = PopupHoverRegions(
             main: NSRect(x: 100, y: 100, width: 240, height: 300),
