@@ -97,15 +97,15 @@ So, if your issue was closed without any response, most probably it already has 
 ### External API
 Stats does not collect any telemetry or analytics. The only external requests it makes are to the following APIs:
 
-- https://api.mac-stats.com – For update checks and retrieving the public IP address
-- https://api.github.com – Fallback for update checks
+- https://api.mac-stats.com – For retrieving the public IP address
+- https://api.github.com/repos/AXIOMZK/stats/releases/latest – For update checks
 
-Both of these APIs are used to check for updates. Additionally, an external request is required to obtain the public IP address. I do not want to use any third-party providers for retrieving the public IP address, so I use my own server for this purpose.
+An external request is required to obtain the public IP address. I do not want to use any third-party providers for retrieving the public IP address, so I use my own server for this purpose.
 
 If you have concerns about these requests, you have a few options:
 
 - propose a PR that allows these features to work without an external server
-- block both of these servers using any network filtering app (if you're reading this, you're likely using something like Little Snitch, so you can easily do this). In this case do not expect to receive any updates or see your public IP in the network module.
+- block either of these servers using any network filtering app (if you're reading this, you're likely using something like Little Snitch, so you can easily do this). In this case do not expect to receive updates from the fork or see your public IP in the network module.
 
 ### How to contribute to the project?
 If you want to develop a new feature, or you've found something that doesn't work, the first step is to open an issue so the feature or problem can be discussed. Pull requests should only be opened for existing issues and after discussion; otherwise, they may be closed automatically. There are a few cases where this can be skipped: language changes, and contributors who have already made significant contributions and whose implementations align well with the project.

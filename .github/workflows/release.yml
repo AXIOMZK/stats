@@ -1,0 +1,107 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v3.0.18"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+
+      - name: Build release assets
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          archive_path="$RUNNER_TEMP/Stats.xcarchive"
+          app_path="$archive_path/Products/Applications/Stats.app"
+          dmg_root="$RUNNER_TEMP/Stats-dmg-root"
+
+          xcodebuild \
+            -scheme Stats \
+            -destination 'platform=macOS' \
+            -configuration Release \
+            -archivePath "$archive_path" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+          test -d "$app_path"
+
+          built_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+          if [[ "$built_version" != "$version" ]]; then
+            echo "Release tag v${version} does not match app version ${built_version}."
+            echo "Update MARKETING_VERSION in Stats.xcodeproj before publishing."
+            exit 1
+          fi
+
+          # The public fork has no Developer ID certificate in CI. Ad-hoc sign
+          # the built app so users can approve it in Privacy & Security.
+          codesign --deep --force --sign - "$app_path"
+          codesign --verify --deep --strict "$app_path"
+
+          ditto -c -k --keepParent "$app_path" "Stats-${version}.zip"
+          mkdir -p "$dmg_root"
+          ditto "$app_path" "$dmg_root/Stats.app"
+          hdiutil create \
+            -volname Stats \
+            -srcfolder "$dmg_root" \
+            -ov \
+            -format UDZO \
+            Stats.dmg
+
+          shasum -a 256 Stats.dmg Stats-${version}.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: Stats ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            Stats.dmg
+            Stats-*.zip
+
+      # Optional: set HOMEBREW_TAP_TOKEN in this repository to automatically
+      # open a cask update PR in AXIOMZK/homebrew-ax-stats.
+      - name: Check Homebrew tap token
+        id: tap-token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -n "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Notify the Homebrew tap
+        if: steps.tap-token.outputs.configured == 'true'
+        uses: peter-evans/repository-dispatch@v3
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: AXIOMZK/homebrew-ax-stats
+          event-type: stats-release
+          client-payload: '{"tag":"${{ env.RELEASE_TAG }}"}'

@@ -126,6 +126,20 @@ class KitTests: XCTestCase {
         XCTAssertFalse(isNewestVersion(currentVersion: "v3.0", latestVersion: "v3.0.0"))
         XCTAssertFalse(isNewestVersion(currentVersion: "", latestVersion: ""))
     }
+
+    func testIsNewestVersion_supportsFourComponentForkReleases() throws {
+        XCTAssertTrue(isNewestVersion(currentVersion: "v3.0.17", latestVersion: "v3.0.17.1"))
+        XCTAssertFalse(isNewestVersion(currentVersion: "v3.0.17.1", latestVersion: "v3.0.17"))
+        XCTAssertFalse(isNewestVersion(currentVersion: "v3.0.17.1", latestVersion: "v3.0.17.1"))
+    }
+
+    func testUpdater_usesAXIOMZKReleaseRepository() throws {
+        XCTAssertEqual(Updater.defaultGitHubRepository, "AXIOMZK/stats")
+        XCTAssertEqual(
+            Updater.releaseAPIURL(for: Updater.defaultGitHubRepository).absoluteString,
+            "https://api.github.com/repos/AXIOMZK/stats/releases/latest"
+        )
+    }
     
     func testUnitsGetReadableSpeed_byte() throws {
         XCTAssertEqual(Units(bytes: 0).getReadableSpeed(base: .byte), "0 KB/s")
