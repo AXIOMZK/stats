@@ -68,20 +68,17 @@ jobs:
             -config "$signing_dir/openssl.cnf" \
             -keyout "$signing_dir/key.pem" \
             -out "$signing_dir/cert.pem"
-          echo "Exporting temporary signing identity"
-          openssl pkcs12 -export \
-            -keypbe PBE-SHA1-3DES \
-            -certpbe PBE-SHA1-3DES \
-            -macalg sha1 \
-            -out "$signing_dir/signing.p12" \
-            -inkey "$signing_dir/key.pem" \
-            -in "$signing_dir/cert.pem" \
-            -passout "pass:$signing_password"
-          security import "$signing_dir/signing.p12" \
+          echo "Importing temporary signing identity"
+          # Import the PEM key and certificate separately. On macOS-15,
+          # importing this self-signed pair as PKCS#12 can leave the
+          # certificate with a null subject-key identifier, so codesign cannot
+          # find the matching private key even though the import reports an
+          # identity.
+          security import "$signing_dir/key.pem" \
             -k "$signing_keychain" \
-            -P "$signing_password" \
-            -T /usr/bin/codesign \
-            -A
+            -T /usr/bin/codesign
+          security import "$signing_dir/cert.pem" \
+            -k "$signing_keychain"
           # codesign can use the imported identity directly. Do not require a
           # trust-store policy here: `security find-identity` returns no valid
           # identities for this temporary root until it is trusted, while the
