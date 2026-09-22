@@ -482,6 +482,13 @@ internal class ChartSensorView: NSStackView {
 // MARK: - Fan curve control
 
 internal final class FanCurveControlView: NSStackView {
+    private struct PointEditorRow {
+        let view: NSStackView
+        let temperature: NSTextField
+        let speed: NSTextField
+        let remove: NSButton
+    }
+
     private let sizeCallback: () -> Void
     private let profilePopup = NSPopUpButton()
     private let applyButton = NSButton()
@@ -492,6 +499,8 @@ internal final class FanCurveControlView: NSStackView {
     private let startField = NSTextField()
     private let ceilingField = NSTextField()
     private let maxSpeedField = NSTextField()
+    private let pointsEditor = NSStackView()
+    private let addPointButton = NSButton()
     private let saveButton = NSButton()
     private let deleteButton = NSButton()
 
@@ -501,6 +510,7 @@ internal final class FanCurveControlView: NSStackView {
     private var restore: (() -> Void)?
     private var save: ((FanCurveProfile) -> Void)?
     private var delete: ((String) -> Void)?
+    private var pointRows: [PointEditorRow] = []
 
     init(width: CGFloat, sizeCallback: @escaping () -> Void) {
         self.sizeCallback = sizeCallback
@@ -564,6 +574,17 @@ internal final class FanCurveControlView: NSStackView {
         self.configureField(self.ceilingField, placeholder: localizedString("Ceiling °C"))
         self.configureField(self.maxSpeedField, placeholder: localizedString("Max %"))
 
+        self.pointsEditor.orientation = .vertical
+        self.pointsEditor.alignment = .leading
+        self.pointsEditor.spacing = 3
+        self.pointsEditor.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        self.addPointButton.title = localizedString("Add point")
+        self.addPointButton.bezelStyle = .texturedRounded
+        self.addPointButton.controlSize = .small
+        self.addPointButton.target = self
+        self.addPointButton.action = #selector(self.addPoint)
+
         let temperatureRow = NSStackView()
         temperatureRow.orientation = .horizontal
         temperatureRow.spacing = 3
@@ -590,6 +611,18 @@ internal final class FanCurveControlView: NSStackView {
 
         self.editor.addArrangedSubview(self.nameField)
         self.editor.addArrangedSubview(temperatureRow)
+        let pointsHeader = NSStackView()
+        pointsHeader.orientation = .horizontal
+        pointsHeader.alignment = .centerY
+        pointsHeader.spacing = 4
+        let pointsTitle = NSTextField(labelWithString: localizedString("Curve points"))
+        pointsTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        pointsHeader.addArrangedSubview(pointsTitle)
+        pointsHeader.addArrangedSubview(NSView())
+        pointsHeader.addArrangedSubview(self.addPointButton)
+        pointsHeader.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+        self.editor.addArrangedSubview(pointsHeader)
+        self.editor.addArrangedSubview(self.pointsEditor)
         self.editor.addArrangedSubview(editorButtons)
 
         self.addArrangedSubview(header)
@@ -680,15 +713,24 @@ internal final class FanCurveControlView: NSStackView {
             alwaysOn: selected.parameters.alwaysOn,
             handsOff: selected.parameters.handsOff
         )
+        let points = self.pointRows.compactMap { row -> FanCurvePoint? in
+            guard let temperature = Double(row.temperature.stringValue), temperature.isFinite,
+                  let speed = Double(row.speed.stringValue), speed.isFinite else { return nil }
+            return FanCurvePoint(
+                temperatureC: temperature,
+                speedPercent: min(max(speed / 100, 0), 1)
+            )
+        }.sorted { $0.temperatureC < $1.temperatureC }
         let profile = FanCurveProfile(
             id: id,
             name: name.isEmpty ? "\(selected.name) Custom" : name,
             parameters: parameters,
-            points: selected.points,
+            points: points,
             fanOverrides: selected.fanOverrides
         )
         self.save?(profile)
         self.activeID = profile.id
+        self.selectProfile(id: profile.id)
     }
 
     @objc private func deleteProfile() {
@@ -725,6 +767,71 @@ internal final class FanCurveControlView: NSStackView {
         self.ceilingField.stringValue = String(format: "%.0f", selected.parameters.ceilingTemperatureC)
         self.maxSpeedField.stringValue = String(format: "%.0f", selected.parameters.maxSpeedPercent * 100)
         self.deleteButton.isEnabled = !self.isBuiltIn(selected.id)
+
+        self.pointRows.forEach {
+            self.pointsEditor.removeArrangedSubview($0.view)
+            $0.view.removeFromSuperview()
+        }
+        self.pointRows.removeAll()
+        selected.points.sorted { $0.temperatureC < $1.temperatureC }.forEach { self.appendPointRow($0) }
+    }
+
+    @objc private func addPoint() {
+        guard let selected = self.selectedProfile else { return }
+        let previous = self.pointRows.last
+        let previousTemperature = previous.flatMap { Double($0.temperature.stringValue) }
+            ?? selected.parameters.startTemperatureC
+        let previousSpeed = previous.flatMap { Double($0.speed.stringValue) }
+            ?? selected.parameters.maxSpeedPercent * 100
+        let temperature = previousTemperature + (previous == nil ? 10 : 5)
+        let speed = min(previousSpeed + (previous == nil ? 25 : 10), 100)
+        self.appendPointRow(FanCurvePoint(temperatureC: temperature, speedPercent: speed / 100))
+        self.recalculateHeight()
+    }
+
+    @objc private func removePoint(_ sender: NSButton) {
+        guard self.pointRows.indices.contains(sender.tag) else { return }
+        self.pointsEditor.removeArrangedSubview(self.pointRows[sender.tag].view)
+        self.pointRows[sender.tag].view.removeFromSuperview()
+        self.pointRows.remove(at: sender.tag)
+        self.pointRows.enumerated().forEach { $0.element.remove.tag = $0.offset }
+        self.recalculateHeight()
+    }
+
+    private func appendPointRow(_ point: FanCurvePoint) {
+        let temperature = NSTextField()
+        let speed = NSTextField()
+        self.configureField(temperature, placeholder: localizedString("°C"))
+        self.configureField(speed, placeholder: localizedString("%"))
+        temperature.stringValue = String(format: "%.0f", point.temperatureC)
+        speed.stringValue = String(format: "%.0f", point.speedPercent * 100)
+
+        let remove = NSButton(image: NSImage(named: NSImage.removeTemplateName) ?? NSImage(), target: self, action: #selector(self.removePoint(_:)))
+        remove.isBordered = false
+        remove.bezelStyle = .texturedRounded
+        remove.controlSize = .small
+        remove.toolTip = localizedString("Remove point")
+        remove.tag = self.pointRows.count
+
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 3
+        row.addArrangedSubview(temperature)
+        row.addArrangedSubview(speed)
+        row.addArrangedSubview(remove)
+        temperature.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        speed.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        row.widthAnchor.constraint(equalTo: self.pointsEditor.widthAnchor).isActive = true
+
+        self.pointRows.append(PointEditorRow(view: row, temperature: temperature, speed: speed, remove: remove))
+        self.pointsEditor.addArrangedSubview(row)
+    }
+
+    private func selectProfile(id: String) {
+        guard let index = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+        self.profilePopup.selectItem(at: index)
+        self.updateEditor()
     }
 
     private func isBuiltIn(_ id: String) -> Bool {

@@ -87,6 +87,7 @@ internal final class FanCurveController {
     private var lastUpdate: TimeInterval = ProcessInfo.processInfo.systemUptime
     private var sustainedSince: TimeInterval?
     private var controlledFanIDs: Set<Int> = []
+    private var currentSensors: [Sensor_p] = []
 
     init(store: FanCurveProfileStore) {
         self.store = store
@@ -109,6 +110,12 @@ internal final class FanCurveController {
         self.sustainedSince = nil
         self.currentFans = fans
         self.postState()
+        // Apply the selected profile immediately when a sensor snapshot is
+        // already available. Without this, Apply only changed persisted state
+        // and the first hardware write waited for the next reader tick.
+        if !self.currentSensors.isEmpty {
+            self.update(self.currentSensors)
+        }
     }
 
     func restoreAutomatic(fans: [Fan]? = nil) {
@@ -117,10 +124,9 @@ internal final class FanCurveController {
         self.lastTargets.removeAll()
         self.sustainedSince = nil
         self.controlledFanIDs.removeAll()
-        guard SMCHelper.shared.isActive() else {
-            self.postState()
-            return
-        }
+        // The first automatic update may be the operation that establishes
+        // the XPC connection. Do not gate this on isActive(), which is only a
+        // snapshot of a connection that may not exist yet.
         fans.filter { $0.id >= 0 }.forEach { fan in
             SMCHelper.shared.setFanMode(fan.id, mode: FanMode.automatic.rawValue)
         }
@@ -128,6 +134,7 @@ internal final class FanCurveController {
     }
 
     func update(_ sensors: [Sensor_p]) {
+        self.currentSensors = sensors
         let fans = sensors.compactMap { $0 as? Fan }.filter { $0.id >= 0 }
         guard !fans.isEmpty else { return }
         self.currentFans = fans
@@ -171,7 +178,8 @@ internal final class FanCurveController {
             }
             self.lastTargets[fan.id] = target
 
-            guard SMCHelper.shared.isActive() else { return }
+            // setFanMode/setFanSpeed establish the helper connection lazily;
+            // checking isActive() here would make Apply a no-op on first use.
             if target <= 0.001 {
                 if self.controlledFanIDs.contains(fan.id) {
                     SMCHelper.shared.setFanMode(fan.id, mode: FanMode.automatic.rawValue)

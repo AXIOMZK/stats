@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "섭씨";
 "Fahrenheit" = "화씨";
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "팬 속도 저장";
 "Fan" = "팬";
 "HID sensors" = "HID 센서";

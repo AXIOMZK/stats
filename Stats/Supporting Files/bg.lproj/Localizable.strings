@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "Целзиус";
 "Fahrenheit" = "Фаренхайт";
+"Fan curve" = "Fan curve";
+"Curve points" = "Curve points";
+"Add point" = "Add point";
+"Remove point" = "Remove point";
+"Profile name" = "Profile name";
+"Start °C" = "Start °C";
+"Ceiling °C" = "Ceiling °C";
+"Max %" = "Max %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "Save custom";
 "Save the fan speed" = "Запазете скоростта на вентилатора";
 "Fan" = "Вентилатор";
 "HID sensors" = "HID сензори"; // gemma4:31b

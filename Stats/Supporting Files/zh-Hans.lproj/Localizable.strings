@@ -387,6 +387,17 @@
 // Sensors
 "Celsius" = "摄氏度";
 "Fahrenheit" = "华氏度";
+"Fan curve" = "风扇曲线";
+"Curve points" = "曲线点位";
+"Add point" = "添加点位";
+"Remove point" = "删除点位";
+"Profile name" = "配置名称";
+"Start °C" = "开始温度 °C";
+"Ceiling °C" = "上限温度 °C";
+"Max %" = "最大转速 %";
+"°C" = "°C";
+"%" = "%";
+"Save custom" = "保存自定义";
 "Save the fan speed" = "保存风扇转速";
 "Fan" = "风扇";
 "HID sensors" = "HID 传感器";
