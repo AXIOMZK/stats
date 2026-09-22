@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - name: Build release assets
         env:
@@ -145,8 +147,15 @@ jobs:
           sign_binary() {
             local target="$1"
             local signing_output
+            local signing_args=(--force --options runtime --timestamp=none)
+            # xcodebuild archives without signing in this job. The final
+            # codesign pass must restore the app's runtime entitlements;
+            # otherwise this self-signed build cannot load its own frameworks.
+            if [[ "$target" == "$app_path" ]]; then
+              signing_args+=(--entitlements "Stats/Supporting Files/Stats.entitlements")
+            fi
             echo "Signing Mach-O: $target"
-            if ! signing_output="$(codesign --force --options runtime --timestamp=none \
+            if ! signing_output="$(codesign "${signing_args[@]}" \
               --keychain "$signing_keychain" \
               --sign "$signing_identity" "$target" 2>&1)"; then
               echo "codesign failed for: $target"
@@ -216,6 +225,22 @@ jobs:
             echo "The privileged fan helper is still ad-hoc signed."
             exit 1
           fi
+
+          # codesign --verify checks the seal but not whether dyld can load
+          # self-signed frameworks. Fail the release before packaging if the
+          # menu-bar process exits during startup.
+          echo "Smoke testing Stats launch"
+          "$app_path/Contents/MacOS/Stats" >"$RUNNER_TEMP/stats-smoke.log" 2>&1 &
+          smoke_pid=$!
+          sleep 8
+          if ! kill -0 "$smoke_pid" 2>/dev/null; then
+            wait "$smoke_pid" || true
+            cat "$RUNNER_TEMP/stats-smoke.log"
+            echo "Stats exited during the launch smoke test."
+            exit 1
+          fi
+          kill "$smoke_pid"
+          wait "$smoke_pid" || true
 
           echo "Packaging release assets"
           ditto -c -k --keepParent "$app_path" "Stats-${version}.zip"
