@@ -822,10 +822,10 @@ internal final class FanCurveControlView: NSStackView {
         row.addArrangedSubview(remove)
         temperature.widthAnchor.constraint(equalToConstant: 70).isActive = true
         speed.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        row.widthAnchor.constraint(equalTo: self.pointsEditor.widthAnchor).isActive = true
 
         self.pointRows.append(PointEditorRow(view: row, temperature: temperature, speed: speed, remove: remove))
         self.pointsEditor.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: self.pointsEditor.widthAnchor).isActive = true
     }
 
     private func selectProfile(id: String) {
