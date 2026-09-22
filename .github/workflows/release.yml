@@ -82,12 +82,14 @@ jobs:
             -P "$signing_password" \
             -T /usr/bin/codesign \
             -A
-          # codesign accepts the self-signed certificate as its own root for
-          # the explicit anchor rootCert requirements below. Do not call
-          # `security add-trusted-cert` here: on macOS-15 hosted runners it
-          # can block waiting for trust-store services and never return.
+          # codesign can use the imported identity directly. Do not require a
+          # trust-store policy here: `security find-identity -p codesigning`
+          # returns no result for this temporary root until it is trusted, and
+          # `security add-trusted-cert` can block on macOS-15 hosted runners.
           echo "Resolving temporary signing identity"
-          signing_identity="$(security find-identity -v -p codesigning "$signing_keychain" | \
+          identity_output="$(security find-identity -v "$signing_keychain" 2>&1)"
+          echo "$identity_output"
+          signing_identity="$(printf '%s\n' "$identity_output" | \
             sed -n 's/.*) \([A-F0-9]*\) .*/\1/p' | head -1)"
           if [[ -z "$signing_identity" ]]; then
             echo "Unable to create a self-signed code-signing identity."
