@@ -83,14 +83,14 @@ jobs:
             -T /usr/bin/codesign \
             -A
           # codesign can use the imported identity directly. Do not require a
-          # trust-store policy here: `security find-identity -p codesigning`
-          # returns no result for this temporary root until it is trusted, and
-          # `security add-trusted-cert` can block on macOS-15 hosted runners.
+          # trust-store policy here: `security find-identity` returns no valid
+          # identities for this temporary root until it is trusted, while the
+          # certificate hash still resolves the imported private-key pair.
           echo "Resolving temporary signing identity"
-          identity_output="$(security find-identity -v "$signing_keychain" 2>&1)"
-          echo "$identity_output"
-          signing_identity="$(printf '%s\n' "$identity_output" | \
-            sed -n 's/.*) \([A-F0-9]*\) .*/\1/p' | head -1)"
+          certificate_output="$(security find-certificate -a -Z "$signing_keychain" 2>&1)"
+          echo "$certificate_output"
+          signing_identity="$(printf '%s\n' "$certificate_output" | \
+            awk '/SHA-1 hash:/{print $3; exit}')"
           if [[ -z "$signing_identity" ]]; then
             echo "Unable to create a self-signed code-signing identity."
             exit 1
