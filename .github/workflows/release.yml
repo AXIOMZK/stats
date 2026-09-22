@@ -67,7 +67,7 @@ jobs:
             -config "$signing_dir/openssl.cnf" \
             -keyout "$signing_dir/key.pem" \
             -out "$signing_dir/cert.pem"
-          openssl pkcs12 -export -legacy \
+          openssl pkcs12 -export \
             -keypbe PBE-SHA1-3DES \
             -certpbe PBE-SHA1-3DES \
             -macalg sha1 \
