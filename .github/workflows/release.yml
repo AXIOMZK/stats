@@ -49,6 +49,9 @@ jobs:
           security create-keychain -p "$signing_password" "$signing_keychain"
           security unlock-keychain -p "$signing_password" "$signing_keychain"
           security set-keychain-settings -lut 21600 "$signing_keychain"
+          # Make the ephemeral keychain the only user search target and grant
+          # Apple's signing tools access to its private key on macOS-15.
+          security list-keychains -d user -s "$signing_keychain"
 
           cat > "$signing_dir/openssl.cnf" <<'EOF'
           [req]
@@ -78,9 +81,16 @@ jobs:
           # identity.
           security import "$signing_dir/key.pem" \
             -k "$signing_keychain" \
-            -T /usr/bin/codesign
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
           security import "$signing_dir/cert.pem" \
             -k "$signing_keychain"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$signing_password" \
+            "$signing_keychain"
+          security find-key -s -t private "$signing_keychain" || true
           # codesign can use the imported identity directly. Do not require a
           # trust-store policy here: `security find-identity` returns no valid
           # identities for this temporary root until it is trusted, while the
