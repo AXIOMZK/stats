@@ -114,6 +114,7 @@ jobs:
             -configuration Release \
             -archivePath "$archive_path" \
             archive \
+            CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
