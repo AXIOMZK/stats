@@ -139,6 +139,15 @@ jobs:
           codesign --deep --force --options runtime --timestamp=none \
             --keychain "$signing_keychain" \
             --sign "$signing_identity" "$app_path"
+          # codesign --deep may recreate LaunchServices helpers while sealing
+          # the outer bundle. Re-sign the privileged helper after that pass,
+          # then refresh only the app seal so the helper remains non-ad-hoc.
+          codesign --force --options runtime --timestamp=none \
+            --keychain "$signing_keychain" \
+            --sign "$signing_identity" "$helper_path"
+          codesign --force --options runtime --timestamp=none \
+            --keychain "$signing_keychain" \
+            --sign "$signing_identity" "$app_path"
           codesign --verify --deep --strict "$app_path"
           codesign --verify \
             --requirements '=anchor rootCert and identifier "eu.exelban.Stats"' \
