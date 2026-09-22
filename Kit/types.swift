@@ -313,6 +313,8 @@ public extension Notification.Name {
     static let moduleRearrange = Notification.Name("moduleRearrange")
     static let pause = Notification.Name("pause")
     static let toggleFanControl = Notification.Name("toggleFanControl")
+    static let fanCurveManualOverride = Notification.Name("fanCurveManualOverride")
+    static let fanCurveProfileState = Notification.Name("fanCurveProfileState")
     static let combinedModulesPopup = Notification.Name("combinedModulesPopup")
     static let remoteLoginSuccess = Notification.Name("remoteLoginSuccess")
     static let remoteState = Notification.Name("remoteState")
@@ -383,6 +385,247 @@ public enum FanValue: String {
     case rpm
     case percentage
 }
+
+/// The interpolation shape used by a native fan curve.
+public enum FanCurveShape: String, Codable, CaseIterable {
+    case linear
+    case easeIn
+    case sCurve
+}
+
+/// One temperature/speed point in a fan curve. Speed is normalized to 0...1.
+public struct FanCurvePoint: Codable, Equatable {
+    public var temperatureC: Double
+    public var speedPercent: Double
+
+    public init(temperatureC: Double, speedPercent: Double) {
+        self.temperatureC = temperatureC
+        self.speedPercent = speedPercent
+    }
+}
+
+/// Parameters shared by built-in and user-created profiles.
+public struct FanCurveParameters: Codable, Equatable {
+    public var stopTemperatureC: Double
+    public var startTemperatureC: Double
+    public var ceilingTemperatureC: Double
+    public var maxSpeedPercent: Double
+    public var rampUpPerSecond: Double
+    public var rampDownPerSecond: Double
+    public var sustainedTriggerSeconds: Double
+    public var curveShape: FanCurveShape
+    public var instantEngage: Bool
+    public var alwaysOn: Bool
+    public var handsOff: Bool
+
+    public init(
+        stopTemperatureC: Double = 50,
+        startTemperatureC: Double = 55,
+        ceilingTemperatureC: Double = 85,
+        maxSpeedPercent: Double = 1,
+        rampUpPerSecond: Double = 0.05,
+        rampDownPerSecond: Double = 0.025,
+        sustainedTriggerSeconds: Double = 0,
+        curveShape: FanCurveShape = .linear,
+        instantEngage: Bool = false,
+        alwaysOn: Bool = false,
+        handsOff: Bool = false
+    ) {
+        self.stopTemperatureC = stopTemperatureC
+        self.startTemperatureC = startTemperatureC
+        self.ceilingTemperatureC = ceilingTemperatureC
+        self.maxSpeedPercent = maxSpeedPercent
+        self.rampUpPerSecond = rampUpPerSecond
+        self.rampDownPerSecond = rampDownPerSecond
+        self.sustainedTriggerSeconds = sustainedTriggerSeconds
+        self.curveShape = curveShape
+        self.instantEngage = instantEngage
+        self.alwaysOn = alwaysOn
+        self.handsOff = handsOff
+    }
+}
+
+/// A persisted, native fan-control strategy.
+public struct FanCurveProfile: Codable, Equatable, Identifiable {
+    public let id: String
+    public var name: String
+    public var parameters: FanCurveParameters
+    public var points: [FanCurvePoint]
+    /// Optional points for a specific physical fan id.
+    public var fanOverrides: [Int: [FanCurvePoint]]
+
+    public init(
+        id: String,
+        name: String,
+        parameters: FanCurveParameters = FanCurveParameters(),
+        points: [FanCurvePoint] = [],
+        fanOverrides: [Int: [FanCurvePoint]] = [:]
+    ) {
+        self.id = id
+        self.name = name
+        self.parameters = parameters
+        self.points = points
+        self.fanOverrides = fanOverrides
+    }
+
+    /// Returns a normalized target in the range 0...1 for the given temperature.
+    /// Invalid/non-finite temperatures fail closed to zero.
+    public func speedPercent(at temperatureC: Double, fanID: Int? = nil) -> Double {
+        guard temperatureC.isFinite else { return 0 }
+
+        let params = self.parameters
+        let stop = min(params.stopTemperatureC, params.startTemperatureC)
+        let start = max(stop, params.startTemperatureC)
+        let ceiling = max(start, params.ceilingTemperatureC)
+        let cap = Self.clamp(params.maxSpeedPercent)
+        let curve = (fanID.flatMap { self.fanOverrides[$0] } ?? self.points)
+            .filter { $0.temperatureC.isFinite && $0.speedPercent.isFinite }
+            .sorted { $0.temperatureC < $1.temperatureC }
+
+        if !params.alwaysOn && temperatureC < start {
+            return 0
+        }
+        if temperatureC <= stop && !params.alwaysOn {
+            return 0
+        }
+        if cap <= 0 || params.handsOff && temperatureC < start {
+            return 0
+        }
+
+        let value: Double
+        if temperatureC >= ceiling {
+            value = cap
+        } else if curve.isEmpty {
+            let range = max(ceiling - start, 0.001)
+            value = cap * Self.shape((temperatureC - start) / range, shape: params.curveShape)
+        } else {
+            value = min(cap, Self.interpolate(curve, temperatureC: temperatureC, shape: params.curveShape))
+        }
+
+        return Self.clamp(value)
+    }
+
+    private static func interpolate(_ points: [FanCurvePoint], temperatureC: Double, shape: FanCurveShape) -> Double {
+        guard let first = points.first else { return 0 }
+        if temperatureC <= first.temperatureC { return clamp(first.speedPercent) }
+        guard let last = points.last else { return 0 }
+        if temperatureC >= last.temperatureC { return clamp(last.speedPercent) }
+
+        for pair in zip(points, points.dropFirst()) {
+            let left = pair.0
+            let right = pair.1
+            guard temperatureC <= right.temperatureC else { continue }
+            let distance = max(right.temperatureC - left.temperatureC, 0.001)
+            let fraction = (temperatureC - left.temperatureC) / distance
+            let shaped = Self.shape(fraction, shape: shape)
+            return clamp(left.speedPercent + (right.speedPercent - left.speedPercent) * shaped)
+        }
+        return clamp(last.speedPercent)
+    }
+
+    private static func shape(_ value: Double, shape: FanCurveShape) -> Double {
+        let t = clamp(value)
+        switch shape {
+        case .linear:
+            return t
+        case .easeIn:
+            return t * t
+        case .sCurve:
+            return t * t * (3 - (2 * t))
+        }
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
+    }
+
+    public static let builtIns: [FanCurveProfile] = [
+        FanCurveProfile(
+            id: "silent",
+            name: "Silent",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 50,
+                startTemperatureC: 55,
+                ceilingTemperatureC: 55,
+                maxSpeedPercent: 0,
+                rampUpPerSecond: 0.05,
+                rampDownPerSecond: 0.025,
+                sustainedTriggerSeconds: 8,
+                handsOff: true
+            ),
+            points: [FanCurvePoint(temperatureC: 55, speedPercent: 0)]
+        ),
+        FanCurveProfile(
+            id: "balanced",
+            name: "Balanced",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 50,
+                startTemperatureC: 55,
+                ceilingTemperatureC: 70,
+                maxSpeedPercent: 0.6,
+                rampUpPerSecond: 0.05,
+                rampDownPerSecond: 0.025,
+                sustainedTriggerSeconds: 8,
+                curveShape: .easeIn
+            ),
+            points: [
+                FanCurvePoint(temperatureC: 55, speedPercent: 0),
+                FanCurvePoint(temperatureC: 70, speedPercent: 1)
+            ]
+        ),
+        FanCurveProfile(
+            id: "performance",
+            name: "Performance",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 50,
+                startTemperatureC: 55,
+                ceilingTemperatureC: 65,
+                maxSpeedPercent: 0.85,
+                rampUpPerSecond: 0.1,
+                rampDownPerSecond: 0.04,
+                sustainedTriggerSeconds: 4
+            ),
+            points: [
+                FanCurvePoint(temperatureC: 55, speedPercent: 0.15),
+                FanCurvePoint(temperatureC: 65, speedPercent: 1)
+            ]
+        ),
+        FanCurveProfile(
+            id: "max",
+            name: "Max",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 0,
+                startTemperatureC: 0,
+                ceilingTemperatureC: 65,
+                maxSpeedPercent: 1,
+                rampUpPerSecond: 1,
+                rampDownPerSecond: 0.1,
+                sustainedTriggerSeconds: 0,
+                instantEngage: true
+            ),
+            points: [FanCurvePoint(temperatureC: 0, speedPercent: 1)]
+        ),
+        FanCurveProfile(
+            id: "smart",
+            name: "Smart",
+            parameters: FanCurveParameters(
+                stopTemperatureC: 50,
+                startTemperatureC: 53,
+                ceilingTemperatureC: 85,
+                maxSpeedPercent: 1,
+                rampUpPerSecond: 0.05,
+                rampDownPerSecond: 0.025,
+                sustainedTriggerSeconds: 6,
+                curveShape: .sCurve
+            ),
+            points: [
+                FanCurvePoint(temperatureC: 53, speedPercent: 0.1),
+                FanCurvePoint(temperatureC: 85, speedPercent: 1)
+            ]
+        )
+    ]
+}
+
 public let FanValues: [KeyValue_t] = [
     KeyValue_t(key: "rpm", value: "RPM", additional: FanValue.rpm),
     KeyValue_t(key: "percentage", value: "Percentage", additional: FanValue.percentage)

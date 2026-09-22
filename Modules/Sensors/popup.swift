@@ -21,6 +21,13 @@ internal class Popup: PopupWrapper {
     private var sensors: [Sensor_p] = []
     private let settingsView: NSStackView = NSStackView()
     private let sensorsCache = PopupCache<[Sensor_p]>()
+    private var fanCurveControl: FanCurveControlView?
+    private var fanCurveProfiles: [FanCurveProfile] = FanCurveProfile.builtIns
+    private var fanCurveActiveID: String?
+    private var fanCurveApply: ((FanCurveProfile) -> Void)?
+    private var fanCurveRestore: (() -> Void)?
+    private var fanCurveSave: ((FanCurveProfile) -> Void)?
+    private var fanCurveDelete: ((String) -> Void)?
     
     private var fanControlState: Bool {
         get { Store.shared.bool(key: "Sensors_fanControl", defaultValue: true) }
@@ -99,6 +106,22 @@ internal class Popup: PopupWrapper {
             )
             separator.widthAnchor.constraint(equalToConstant: Constants.Popup.width).isActive = true
             self.addArrangedSubview(separator)
+
+            if self.fanCurveProfiles.isEmpty == false {
+                let curveControl = self.fanCurveControl ?? FanCurveControlView(width: self.frame.width) { [weak self] in
+                    self?.recalculateHeight()
+                }
+                curveControl.configure(
+                    profiles: self.fanCurveProfiles,
+                    activeID: self.fanCurveActiveID,
+                    apply: self.fanCurveApply,
+                    restore: self.fanCurveRestore,
+                    save: self.fanCurveSave,
+                    delete: self.fanCurveDelete
+                )
+                self.fanCurveControl = curveControl
+                self.addArrangedSubview(curveControl)
+            }
             
             let container = NSStackView()
             container.orientation = .vertical
@@ -195,6 +218,30 @@ internal class Popup: PopupWrapper {
             
             self.sensorsCache.apply(values, visible: self.window?.isVisible ?? false, render: self.renderSensors)
         })
+    }
+
+    internal func configureFanProfiles(
+        profiles: [FanCurveProfile],
+        activeID: String?,
+        apply: ((FanCurveProfile) -> Void)?,
+        restore: (() -> Void)?,
+        save: ((FanCurveProfile) -> Void)?,
+        delete: ((String) -> Void)?
+    ) {
+        self.fanCurveProfiles = profiles
+        self.fanCurveActiveID = activeID
+        self.fanCurveApply = apply
+        self.fanCurveRestore = restore
+        self.fanCurveSave = save
+        self.fanCurveDelete = delete
+        self.fanCurveControl?.configure(
+            profiles: profiles,
+            activeID: activeID,
+            apply: apply,
+            restore: restore,
+            save: save,
+            delete: delete
+        )
     }
     
     private func renderSensors(_ values: [Sensor_p]) {
@@ -432,6 +479,276 @@ internal class ChartSensorView: NSStackView {
     }
 }
 
+// MARK: - Fan curve control
+
+internal final class FanCurveControlView: NSStackView {
+    private let sizeCallback: () -> Void
+    private let profilePopup = NSPopUpButton()
+    private let applyButton = NSButton()
+    private let restoreButton = NSButton()
+    private let editorButton = NSButton()
+    private let editor = NSStackView()
+    private let nameField = NSTextField()
+    private let startField = NSTextField()
+    private let ceilingField = NSTextField()
+    private let maxSpeedField = NSTextField()
+    private let saveButton = NSButton()
+    private let deleteButton = NSButton()
+
+    private var profiles: [FanCurveProfile] = []
+    private var activeID: String?
+    private var apply: ((FanCurveProfile) -> Void)?
+    private var restore: (() -> Void)?
+    private var save: ((FanCurveProfile) -> Void)?
+    private var delete: ((String) -> Void)?
+
+    init(width: CGFloat, sizeCallback: @escaping () -> Void) {
+        self.sizeCallback = sizeCallback
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 0))
+
+        self.orientation = .vertical
+        self.alignment = .leading
+        self.distribution = .fill
+        self.spacing = 4
+        self.edgeInsets = NSEdgeInsets(top: 4, left: Constants.Popup.margins / 2, bottom: 4, right: Constants.Popup.margins / 2)
+        self.widthAnchor.constraint(equalToConstant: width).isActive = true
+
+        let title = NSTextField(labelWithString: localizedString("Fan curve"))
+        title.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+
+        self.applyButton.title = localizedString("Apply")
+        self.applyButton.bezelStyle = .texturedRounded
+        self.applyButton.target = self
+        self.applyButton.action = #selector(self.applyProfile)
+
+        self.restoreButton.title = localizedString("Automatic")
+        self.restoreButton.bezelStyle = .texturedRounded
+        self.restoreButton.target = self
+        self.restoreButton.action = #selector(self.restoreAutomatic)
+
+        self.editorButton.title = localizedString("Edit")
+        self.editorButton.bezelStyle = .texturedRounded
+        self.editorButton.target = self
+        self.editorButton.action = #selector(self.toggleEditor)
+
+        self.profilePopup.target = self
+        self.profilePopup.action = #selector(self.profileChanged)
+        self.profilePopup.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let header = NSStackView()
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 4
+        header.addArrangedSubview(title)
+        header.addArrangedSubview(NSView())
+        header.addArrangedSubview(self.applyButton)
+        header.addArrangedSubview(self.restoreButton)
+        let contentWidth = max(width - self.edgeInsets.left - self.edgeInsets.right, 1)
+        header.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        let selectorRow = NSStackView()
+        selectorRow.orientation = .horizontal
+        selectorRow.alignment = .centerY
+        selectorRow.spacing = 4
+        selectorRow.addArrangedSubview(self.profilePopup)
+        selectorRow.addArrangedSubview(self.editorButton)
+        selectorRow.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        self.editor.orientation = .vertical
+        self.editor.spacing = 3
+        self.editor.isHidden = true
+        self.editor.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
+
+        self.configureField(self.nameField, placeholder: localizedString("Profile name"))
+        self.configureField(self.startField, placeholder: localizedString("Start °C"))
+        self.configureField(self.ceilingField, placeholder: localizedString("Ceiling °C"))
+        self.configureField(self.maxSpeedField, placeholder: localizedString("Max %"))
+
+        let temperatureRow = NSStackView()
+        temperatureRow.orientation = .horizontal
+        temperatureRow.spacing = 3
+        temperatureRow.addArrangedSubview(self.startField)
+        temperatureRow.addArrangedSubview(self.ceilingField)
+        temperatureRow.addArrangedSubview(self.maxSpeedField)
+        temperatureRow.distribution = .fillEqually
+
+        self.saveButton.title = localizedString("Save custom")
+        self.saveButton.bezelStyle = .texturedRounded
+        self.saveButton.target = self
+        self.saveButton.action = #selector(self.saveProfile)
+        self.deleteButton.title = localizedString("Delete")
+        self.deleteButton.bezelStyle = .texturedRounded
+        self.deleteButton.target = self
+        self.deleteButton.action = #selector(self.deleteProfile)
+        self.deleteButton.isEnabled = false
+
+        let editorButtons = NSStackView()
+        editorButtons.orientation = .horizontal
+        editorButtons.spacing = 4
+        editorButtons.addArrangedSubview(self.saveButton)
+        editorButtons.addArrangedSubview(self.deleteButton)
+
+        self.editor.addArrangedSubview(self.nameField)
+        self.editor.addArrangedSubview(temperatureRow)
+        self.editor.addArrangedSubview(editorButtons)
+
+        self.addArrangedSubview(header)
+        self.addArrangedSubview(selectorRow)
+        self.addArrangedSubview(self.editor)
+        self.recalculateHeight()
+
+        NotificationCenter.default.addObserver(self, selector: #selector(self.profileStateChanged), name: .fanCurveProfileState, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(self.fanControlStateChanged), name: .toggleFanControl, object: nil)
+        self.isHidden = !Store.shared.bool(key: "Sensors_fanControl", defaultValue: true)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    func configure(
+        profiles: [FanCurveProfile],
+        activeID: String?,
+        apply: ((FanCurveProfile) -> Void)?,
+        restore: (() -> Void)?,
+        save: ((FanCurveProfile) -> Void)?,
+        delete: ((String) -> Void)?
+    ) {
+        self.profiles = profiles
+        self.activeID = activeID
+        self.apply = apply
+        self.restore = restore
+        self.save = save
+        self.delete = delete
+
+        self.profilePopup.removeAllItems()
+        profiles.forEach { self.profilePopup.addItem(withTitle: $0.name) }
+        if let activeID, let index = profiles.firstIndex(where: { $0.id == activeID }) {
+            self.profilePopup.selectItem(at: index)
+        } else if !profiles.isEmpty {
+            self.profilePopup.selectItem(at: 0)
+        }
+        self.updateEditor()
+        self.recalculateHeight()
+    }
+
+    @objc private func profileChanged() {
+        self.updateEditor()
+    }
+
+    @objc private func applyProfile() {
+        guard let profile = self.selectedProfile else { return }
+        self.activeID = profile.id
+        self.apply?(profile)
+    }
+
+    @objc private func restoreAutomatic() {
+        self.activeID = nil
+        self.restore?()
+    }
+
+    @objc private func toggleEditor() {
+        self.editor.isHidden.toggle()
+        self.editorButton.title = self.editor.isHidden ? localizedString("Edit") : localizedString("Hide")
+        self.recalculateHeight()
+    }
+
+    @objc private func saveProfile() {
+        guard let selected = self.selectedProfile else { return }
+        let name = self.nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id: String
+        if self.isBuiltIn(selected.id) {
+            id = "custom-\(UUID().uuidString.lowercased())"
+        } else {
+            id = selected.id
+        }
+
+        let parameters = FanCurveParameters(
+            stopTemperatureC: selected.parameters.stopTemperatureC,
+            startTemperatureC: self.doubleValue(self.startField, fallback: selected.parameters.startTemperatureC),
+            ceilingTemperatureC: self.doubleValue(self.ceilingField, fallback: selected.parameters.ceilingTemperatureC),
+            maxSpeedPercent: self.doubleValue(self.maxSpeedField, fallback: selected.parameters.maxSpeedPercent * 100) / 100,
+            rampUpPerSecond: selected.parameters.rampUpPerSecond,
+            rampDownPerSecond: selected.parameters.rampDownPerSecond,
+            sustainedTriggerSeconds: selected.parameters.sustainedTriggerSeconds,
+            curveShape: selected.parameters.curveShape,
+            instantEngage: selected.parameters.instantEngage,
+            alwaysOn: selected.parameters.alwaysOn,
+            handsOff: selected.parameters.handsOff
+        )
+        let profile = FanCurveProfile(
+            id: id,
+            name: name.isEmpty ? "\(selected.name) Custom" : name,
+            parameters: parameters,
+            points: selected.points,
+            fanOverrides: selected.fanOverrides
+        )
+        self.save?(profile)
+        self.activeID = profile.id
+    }
+
+    @objc private func deleteProfile() {
+        guard let selected = self.selectedProfile, !self.isBuiltIn(selected.id) else { return }
+        self.delete?(selected.id)
+    }
+
+    @objc private func profileStateChanged(_ notification: Notification) {
+        let activeID = notification.userInfo?["activeID"] as? String
+        DispatchQueue.main.async { [weak self] in
+            self?.activeID = activeID
+            self?.setNeedsDisplay(self?.bounds ?? .zero)
+        }
+    }
+
+    @objc private func fanControlStateChanged(_ notification: Notification) {
+        guard let state = notification.userInfo?["state"] as? Bool else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.isHidden = !state
+            self?.recalculateHeight()
+        }
+    }
+
+    private var selectedProfile: FanCurveProfile? {
+        guard self.profilePopup.indexOfSelectedItem >= 0,
+              self.profilePopup.indexOfSelectedItem < self.profiles.count else { return nil }
+        return self.profiles[self.profilePopup.indexOfSelectedItem]
+    }
+
+    private func updateEditor() {
+        guard let selected = self.selectedProfile else { return }
+        self.nameField.stringValue = selected.name
+        self.startField.stringValue = String(format: "%.0f", selected.parameters.startTemperatureC)
+        self.ceilingField.stringValue = String(format: "%.0f", selected.parameters.ceilingTemperatureC)
+        self.maxSpeedField.stringValue = String(format: "%.0f", selected.parameters.maxSpeedPercent * 100)
+        self.deleteButton.isEnabled = !self.isBuiltIn(selected.id)
+    }
+
+    private func isBuiltIn(_ id: String) -> Bool {
+        FanCurveProfile.builtIns.contains { $0.id == id }
+    }
+
+    private func configureField(_ field: NSTextField, placeholder: String) {
+        field.placeholderString = placeholder
+        field.font = NSFont.systemFont(ofSize: 11)
+        field.alignment = .center
+        field.controlSize = .small
+    }
+
+    private func doubleValue(_ field: NSTextField, fallback: Double) -> Double {
+        Double(field.stringValue) ?? fallback
+    }
+
+    private func recalculateHeight() {
+        let height = self.arrangedSubviews.map { $0.fittingSize.height }.reduce(0, +) + self.edgeInsets.top + self.edgeInsets.bottom + CGFloat(max(self.arrangedSubviews.count - 1, 0)) * self.spacing
+        self.setFrameSize(NSSize(width: self.frame.width, height: max(height, 28)))
+        self.sizeCallback()
+    }
+}
+
 // MARK: - Fan view
 
 internal class FanView: NSStackView {
@@ -617,6 +934,7 @@ internal class FanView: NSStackView {
                 self?.fan.mode = mode
                 self?.fan.customMode = mode
                 SMCHelper.shared.setFanMode(fan.id, mode: mode.rawValue)
+                NotificationCenter.default.post(name: .fanCurveManualOverride, object: fan.id)
             }
             self?.toggleControlView(mode == .forced)
         }
@@ -629,6 +947,7 @@ internal class FanView: NSStackView {
                 self?.fan.customMode = .forced
                 SMCHelper.shared.setFanSpeed(fan.id, speed: 0)
                 self?.fan.customSpeed = 0
+                NotificationCenter.default.post(name: .fanCurveManualOverride, object: fan.id)
             }
             self?.toggleControlView(false)
         }
@@ -641,6 +960,7 @@ internal class FanView: NSStackView {
                 self?.fan.customMode = .forced
                 SMCHelper.shared.setFanSpeed(fan.id, speed: Int(fan.maxSpeed))
                 self?.fan.customSpeed = Int(fan.maxSpeed)
+                NotificationCenter.default.post(name: .fanCurveManualOverride, object: fan.id)
             }
             self?.toggleControlView(false)
         }
@@ -798,6 +1118,7 @@ internal class FanView: NSStackView {
         })
         
         if sender.tag != 4 {
+            NotificationCenter.default.post(name: .fanCurveManualOverride, object: self.fan.id)
             if self.fan.minSpeed != 0 && self.fan.maxSpeed != 0 && self.fan.maxSpeed != self.fan.minSpeed {
                 let percentage = Int((100*(value-self.fan.minSpeed))/(self.fan.maxSpeed - self.fan.minSpeed))
                 NotificationCenter.default.post(name: .syncFansControl, object: nil, userInfo: ["percentage": percentage])
