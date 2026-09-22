@@ -98,12 +98,23 @@ jobs:
           echo "Resolving temporary signing identity"
           certificate_output="$(security find-certificate -a -Z "$signing_keychain" 2>&1)"
           echo "$certificate_output"
-          signing_identity="$(printf '%s\n' "$certificate_output" | \
+          certificate_hash="$(printf '%s\n' "$certificate_output" | \
             awk '/SHA-1 hash:/{print $3; exit}')"
-          if [[ -z "$signing_identity" ]]; then
+          if [[ -z "$certificate_hash" ]]; then
             echo "Unable to create a self-signed code-signing identity."
             exit 1
           fi
+          # macOS-15 can list the certificate hash while codesign still fails
+          # to resolve the paired private key by hash. The certificate label
+          # resolves the imported key pair reliably once its ACL is prepared.
+          signing_identity="AX Stats Build Signing"
+          echo "Using temporary signing identity: $signing_identity"
+          preflight_binary="$RUNNER_TEMP/ax-stats-signing-preflight"
+          cp /usr/bin/true "$preflight_binary"
+          codesign --force --options runtime --timestamp=none \
+            --keychain "$signing_keychain" \
+            --sign "$signing_identity" "$preflight_binary"
+          codesign --verify "$preflight_binary"
 
           # The helper's embedded SMAuthorizedClients requirement must match
           # the app's self-signed designated requirement. Keep this CI-only;
