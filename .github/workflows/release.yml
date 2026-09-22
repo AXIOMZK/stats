@@ -142,7 +142,21 @@ jobs:
           echo "Signing and verifying Stats.app"
           test -d "$app_path"
 
+          sign_binary() {
+            local target="$1"
+            local signing_output
+            echo "Signing Mach-O: $target"
+            if ! signing_output="$(codesign --force --options runtime --timestamp=none \
+              --keychain "$signing_keychain" \
+              --sign "$signing_identity" "$target" 2>&1)"; then
+              echo "codesign failed for: $target"
+              printf '%s\n' "$signing_output"
+              exit 1
+            fi
+          }
+
           built_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
+          echo "Built app version: $built_version"
           if [[ "$built_version" != "$version" ]]; then
             echo "Release tag v${version} does not match app version ${built_version}."
             echo "Update MARKETING_VERSION in Stats.xcodeproj before publishing."
@@ -152,25 +166,24 @@ jobs:
           helper_path="$app_path/Contents/Library/LaunchServices/eu.exelban.Stats.SMC.Helper"
           while IFS= read -r executable; do
             if file -b "$executable" | grep -q 'Mach-O'; then
-              codesign --force --options runtime --timestamp=none \
-                --keychain "$signing_keychain" \
-                --sign "$signing_identity" "$executable"
+              sign_binary "$executable"
             fi
           done < <(find "$app_path" -type f -print)
           # The app bundle seal is written last. This explicit pass is needed
           # because codesign --deep does not discover LaunchServices helpers.
-          codesign --deep --force --options runtime --timestamp=none \
+          echo "Signing app bundle: $app_path"
+          if ! signing_output="$(codesign --deep --force --options runtime --timestamp=none \
             --keychain "$signing_keychain" \
-            --sign "$signing_identity" "$app_path"
+            --sign "$signing_identity" "$app_path" 2>&1)"; then
+            echo "codesign failed for app bundle: $app_path"
+            printf '%s\n' "$signing_output"
+            exit 1
+          fi
           # codesign --deep may recreate LaunchServices helpers while sealing
           # the outer bundle. Re-sign the privileged helper after that pass,
           # then refresh only the app seal so the helper remains non-ad-hoc.
-          codesign --force --options runtime --timestamp=none \
-            --keychain "$signing_keychain" \
-            --sign "$signing_identity" "$helper_path"
-          codesign --force --options runtime --timestamp=none \
-            --keychain "$signing_keychain" \
-            --sign "$signing_identity" "$app_path"
+          sign_binary "$helper_path"
+          sign_binary "$app_path"
           codesign --verify --deep --strict "$app_path"
           codesign --verify \
             --requirements '=anchor rootCert and identifier "eu.exelban.Stats"' \
