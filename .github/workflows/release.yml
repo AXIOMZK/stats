@@ -164,11 +164,31 @@ jobs:
           fi
 
           helper_path="$app_path/Contents/Library/LaunchServices/eu.exelban.Stats.SMC.Helper"
-          while IFS= read -r executable; do
-            if file -b "$executable" | grep -q 'Mach-O'; then
-              sign_binary "$executable"
+          sign_bundle() {
+            local target="$1"
+            local signing_output
+            echo "Signing nested bundle: $target"
+            if ! signing_output="$(codesign --force --options runtime --timestamp=none \
+              --keychain "$signing_keychain" \
+              --sign "$signing_identity" "$target" 2>&1)"; then
+              echo "codesign failed for nested bundle: $target"
+              printf '%s\n' "$signing_output"
+              exit 1
             fi
-          done < <(find "$app_path" -type f -print)
+          }
+
+          # Sign nested bundles from the deepest path outward. The main app
+          # executable refuses to sign while an embedded extension is still
+          # unsigned, so bundle seals must exist before the outer app pass.
+          while IFS= read -r nested_bundle; do
+            sign_bundle "$nested_bundle"
+          done < <(
+            find "$app_path" -type d \( -name '*.appex' -o -name '*.framework' -o -name '*.xpc' \) -print \
+              | awk '{ print gsub(/\//, "/"), $0 }' \
+              | sort -rn \
+              | cut -d' ' -f2-
+          )
+          sign_binary "$helper_path"
           # The app bundle seal is written last. This explicit pass is needed
           # because codesign --deep does not discover LaunchServices helpers.
           echo "Signing app bundle: $app_path"
