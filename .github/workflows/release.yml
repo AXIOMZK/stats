@@ -45,6 +45,7 @@ jobs:
           signing_password="$(openssl rand -hex 24)"
           signing_dir="$RUNNER_TEMP/ax-stats-signing"
           mkdir -p "$signing_dir"
+          echo "Creating temporary signing keychain"
           security create-keychain -p "$signing_password" "$signing_keychain"
           security unlock-keychain -p "$signing_password" "$signing_keychain"
           security set-keychain-settings -lut 21600 "$signing_keychain"
@@ -67,6 +68,7 @@ jobs:
             -config "$signing_dir/openssl.cnf" \
             -keyout "$signing_dir/key.pem" \
             -out "$signing_dir/cert.pem"
+          echo "Exporting temporary signing identity"
           openssl pkcs12 -export \
             -keypbe PBE-SHA1-3DES \
             -certpbe PBE-SHA1-3DES \
@@ -80,8 +82,11 @@ jobs:
             -P "$signing_password" \
             -T /usr/bin/codesign \
             -A
-          security add-trusted-cert -d -r trustRoot \
-            -k "$signing_keychain" "$signing_dir/cert.pem"
+          # codesign accepts the self-signed certificate as its own root for
+          # the explicit anchor rootCert requirements below. Do not call
+          # `security add-trusted-cert` here: on macOS-15 hosted runners it
+          # can block waiting for trust-store services and never return.
+          echo "Resolving temporary signing identity"
           signing_identity="$(security find-identity -v -p codesigning "$signing_keychain" | \
             sed -n 's/.*) \([A-F0-9]*\) .*/\1/p' | head -1)"
           if [[ -z "$signing_identity" ]]; then
@@ -101,6 +106,7 @@ jobs:
             "Set :SMAuthorizedClients:0 $client_requirement" \
             "SMC/Helper/Info.plist"
 
+          echo "Archiving Stats.app"
           xcodebuild \
             -scheme Stats \
             -destination 'platform=macOS' \
@@ -110,6 +116,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
+          echo "Signing and verifying Stats.app"
           test -d "$app_path"
 
           built_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Contents/Info.plist")"
@@ -145,6 +152,7 @@ jobs:
             exit 1
           fi
 
+          echo "Packaging release assets"
           ditto -c -k --keepParent "$app_path" "Stats-${version}.zip"
           mkdir -p "$dmg_root"
           ditto "$app_path" "$dmg_root/Stats.app"
@@ -156,6 +164,7 @@ jobs:
             Stats.dmg
 
           shasum -a 256 Stats.dmg Stats-${version}.zip
+          echo "Release assets ready"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
