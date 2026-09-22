@@ -63,6 +63,8 @@ jobs:
           basicConstraints = critical,CA:false
           keyUsage = critical,digitalSignature
           extendedKeyUsage = codeSigning
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid,issuer
           EOF
           openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 \
             -config "$signing_dir/openssl.cnf" \
